@@ -1,0 +1,4 @@
+allowBuilds:
+  '@sentry/cli': false
+  '@tailwindcss/oxide': true
+  sharp: set this to true or false
