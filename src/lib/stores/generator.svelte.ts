@@ -3,14 +3,13 @@ import type {
 	StyleCapsulesParams, StyleGeoParams, StyleTopoParams, StyleSmileyParams,
 	StyleWavesParams, StyleBlobsParams, StyleFluidParams, StyleHexParams,
 	StyleDiagParams, StyleGradientParams, StyleStripsParams, StyleRingsParams,
-	Resolution
 } from '$lib/generators/types';
 import {
 	DEFAULT_CAPSULES_PARAMS, DEFAULT_GEO_PARAMS, DEFAULT_TOPO_PARAMS, DEFAULT_SMILEY_PARAMS,
 	DEFAULT_WAVES_PARAMS, DEFAULT_BLOBS_PARAMS, DEFAULT_FLUID_PARAMS, DEFAULT_HEX_PARAMS,
 	DEFAULT_DIAG_PARAMS, DEFAULT_GRADIENT_PARAMS, DEFAULT_STRIPS_PARAMS, DEFAULT_RINGS_PARAMS,
-	DEFAULT_RESOLUTION
 } from '$lib/generators/constants';
+import { type DeviceConfig, DEVICES, DEFAULT_DEVICE } from '$lib/devices';
 
 export const generator: GeneratorStore = $state({
 	style: 'capsules' as Style,
@@ -26,7 +25,7 @@ export const generator: GeneratorStore = $state({
 	gradientParams:  { ...DEFAULT_GRADIENT_PARAMS },
 	stripsParams:    { ...DEFAULT_STRIPS_PARAMS },
 	ringsParams:     { ...DEFAULT_RINGS_PARAMS },
-	resolution:      DEFAULT_RESOLUTION,
+	device:          { ...DEFAULT_DEVICE, resolution: { ...DEFAULT_DEVICE.resolution } },
 	format:          'png' as const,
 	svgPreview:      null,
 	isRendering:     false,
@@ -51,7 +50,17 @@ export function getActiveParams() {
 }
 
 export function setStyle(style: Style) { generator.style = style; }
-export function updateResolution(res: Resolution) { generator.resolution = res; }
+
+export function setDevice(id: string) {
+	const d = DEVICES.find(d => d.id === id);
+	if (d) generator.device = { ...d, resolution: { ...d.resolution } };
+}
+
+export function setLibreResolution(width: number, height: number) {
+	generator.device = { ...generator.device, resolution: { width, height } };
+}
+
+export { type DeviceConfig };
 
 type Mut<P> = { [K in keyof P]: P[K] };
 

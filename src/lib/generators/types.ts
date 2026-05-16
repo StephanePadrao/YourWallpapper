@@ -1,3 +1,6 @@
+import type { DeviceConfig } from '$lib/devices';
+export type { DeviceConfig };
+
 export type Style =
 	| 'capsules'
 	| 'geo'
@@ -193,7 +196,7 @@ export interface GeneratorStore {
 	gradientParams: StyleGradientParams;
 	stripsParams: StyleStripsParams;
 	ringsParams: StyleRingsParams;
-	resolution: Resolution;
+	device: DeviceConfig;
 	format: ExportFormat;
 	svgPreview: string | null;
 	isRendering: boolean;

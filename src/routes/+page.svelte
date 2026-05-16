@@ -16,7 +16,7 @@
 	import { generateStripsSVG } from '$lib/generators/style-strips/strips';
 	import { generateRingsSVG } from '$lib/generators/style-rings/rings';
 	import {
-		PALETTE_PRESETS, RESOLUTIONS, SMILEY_EXPRESSIONS,
+		PALETTE_PRESETS, SMILEY_EXPRESSIONS,
 		DEFAULT_STRIPS_PARAMS, DEFAULT_WAVES_PARAMS, DEFAULT_GRADIENT_PARAMS,
 		DEFAULT_RINGS_PARAMS, DEFAULT_CAPSULES_PARAMS, DEFAULT_TOPO_PARAMS,
 		DEFAULT_BLOBS_PARAMS, DEFAULT_DIAG_PARAMS,
@@ -27,9 +27,11 @@
 		updateWavesParam, updateBlobsParam, updateFluidParam, updateHexParam,
 		updateDiagParam, updateGradientParam, updateStripsParam, updateRingsParam,
 		updateActivePalette, updateActiveSeed, getActivePalette, getActiveSeed,
-		updateResolution,
 	} from '$lib/stores/generator.svelte';
+	import { BEZEL_COORDS } from '$lib/devices';
+	import DevicePicker from '$lib/components/DevicePicker.svelte';
 	import { downloadSVG, downloadFromUrl, buildFilename } from '$lib/generators/export';
+	import { makeSlug, makeShareUrl, decodeState, applyDecodedState, encodeState } from '$lib/url-state';
 	import type {
 		Style, GeoShape, SmileyExpression, SmileyArrangement, SmileyColorMode,
 		SmileyRenderMode, HexGradientType, CapsuleLayout, WaveDirection,
@@ -37,16 +39,6 @@
 	} from '$lib/generators/types';
 
 	const paymentEnabled = PUBLIC_PAYMENT_ENABLED === 'true';
-
-	// Screen area % — pixel-exact from BFS mask bounding boxes:
-	// phone:   x=72-1277 (1206px), y=69-2690 (2622px)  → PNG 1350×2760
-	// ipad:    x=130-1769 (1640px), y=130-2489 (2360px) → PNG 1900×2620
-	// monitor: x=140-5259 (5120px), y=140-3019 (2880px) → PNG 5400×4160
-	const BEZEL = {
-		phone:   { pngW: 1350, pngH: 2760, sx: 5.3333, sy: 2.5000, sw: 89.3333, sh: 95.0000 },
-		ipad:    { pngW: 1900, pngH: 2620, sx: 6.8421, sy: 4.9618, sw: 86.3158, sh: 90.0763 },
-		monitor: { pngW: 5400, pngH: 4160, sx: 2.5926, sy: 3.3654, sw: 94.8148, sh: 69.2308 },
-	} as const;
 
 	const STYLES: { id: Style; label: string }[] = [
 		{ id: 'capsules', label: 'Capsules' },
@@ -76,10 +68,6 @@
 	interface GalleryItem { svg: string; label: string; palette: string; }
 	let galleryItems = $state<GalleryItem[]>([]);
 
-	// ── Mockup device ─────────────────────────────────────────────────────────
-	type MockupDevice = 'free' | 'phone' | 'ipad' | 'monitor';
-	let mockupDevice = $state<MockupDevice>('free');
-
 	// ── State ─────────────────────────────────────────────────────────────────
 	let svgContainer: HTMLDivElement | null = $state(null);
 	let svgString = $state('');
@@ -93,11 +81,11 @@
 	// ── Preview ───────────────────────────────────────────────────────────────
 	const PREVIEW_W = 900;
 	const previewH = $derived(
-		Math.round(PREVIEW_W * generator.resolution.height / generator.resolution.width)
+		Math.round(PREVIEW_W * generator.device.resolution.height / generator.device.resolution.width)
 	);
-	const previewAspect = $derived(generator.resolution.width / generator.resolution.height);
+	const previewAspect = $derived(generator.device.resolution.width / generator.device.resolution.height);
 	const isHighRes = $derived(
-		generator.resolution.width * generator.resolution.height > 2560 * 1440
+		generator.device.resolution.width * generator.device.resolution.height > 2560 * 1440
 	);
 	const activePaletteStr = $derived(
 		typeof getActivePalette() === 'string' ? (getActivePalette() as string) : '__custom__'
@@ -147,10 +135,18 @@
 
 	onMount(() => {
 		const url = $page.url;
-		const seed = url.searchParams.get('seed');
-		if (seed) updateActiveSeed(seed);
-		const palette = url.searchParams.get('palette');
-		if (palette && PALETTE_PRESETS.find((p) => p.name === palette)) updateActivePalette(palette);
+		// New-style URL state (?s=base64url)
+		const s = url.searchParams.get('s');
+		if (s) {
+			const decoded = decodeState(s);
+			if (decoded) applyDecodedState(decoded, generator);
+		} else {
+			// Legacy params (?seed=&palette=)
+			const seed = url.searchParams.get('seed');
+			if (seed) updateActiveSeed(seed);
+			const palette = url.searchParams.get('palette');
+			if (palette && PALETTE_PRESETS.find((p) => p.name === palette)) updateActivePalette(palette);
+		}
 		updateUiAccent();
 		regenerate();
 
@@ -323,7 +319,7 @@
 				body: JSON.stringify({
 					style: generator.style,
 					params: getActiveParamsForExport(),
-					resolution: { width: generator.resolution.width, height: generator.resolution.height },
+					resolution: { width: generator.device.resolution.width, height: generator.device.resolution.height },
 					format: generator.format,
 				}),
 			});
@@ -343,27 +339,11 @@
 		downloadSVG(el as SVGSVGElement, buildFilename(generator.style, activePaletteStr, getActiveSeed()), 'free');
 	}
 
-	// Resolutions matched to exact bezel PNG screen dimensions:
-	// phone.png   = iPhone 17 Pro  → screen 1206×2622
-	// ipad.png    = iPad Air 11"   → screen 1640×2360
-	// monitor.png = Studio Display → screen 5120×2880
-	function switchDevice(device: MockupDevice) {
-		mockupDevice = device;
-		if (device === 'phone') {
-			const r = RESOLUTIONS.find(r => r.deviceName === 'iPhone 17 Pro');
-			if (r) updateResolution(r);
-		} else if (device === 'ipad') {
-			const r = RESOLUTIONS.find(r => r.deviceName === 'iPad Air');
-			if (r) updateResolution(r);
-		} else if (device === 'monitor') {
-			const r = RESOLUTIONS.find(r => r.deviceName === 'Studio Display 27"');
-			if (r) updateResolution(r);
-		}
-	}
-
 	async function shareUrl() {
-		const params = new URLSearchParams({ seed: getActiveSeed(), palette: activePaletteStr, style: generator.style });
-		await navigator.clipboard.writeText(`${window.location.origin}/g/${getActiveSeed()}?${params}`);
+		const slug = makeSlug(generator.style, getActiveSeed());
+		updateActiveSeed(slug); // seed becomes the slug for reproducibility
+		const url = makeShareUrl(window.location.origin, slug, generator);
+		await navigator.clipboard.writeText(url);
 		copied = true;
 		setTimeout(() => (copied = false), 2000);
 	}
@@ -842,19 +822,8 @@
 					{/if}
 				</button>
 			</div>
-			<select value={generator.resolution.label} onchange={(e) => { const r = RESOLUTIONS.find(r => r.label === e.currentTarget.value); if (r) updateResolution(r); }} class="res-select">
-				<optgroup label="Générique">
-					{#each RESOLUTIONS.filter(r => r.group === 'generic') as r}
-						<option value={r.label}>{r.deviceName} — {r.label}</option>
-					{/each}
-				</optgroup>
-				<optgroup label="Apple">
-					{#each RESOLUTIONS.filter(r => r.group === 'apple') as r}
-						<option value={r.label}>{r.deviceName}</option>
-					{/each}
-				</optgroup>
-			</select>
-			{#if isHighRes}<p class="hint">Résolution Pro — watermark en tier gratuit</p>{/if}
+			<DevicePicker />
+			<p class="hint">{generator.device.resolution.width}×{generator.device.resolution.height}{isHighRes ? ' — résolution haute' : ''}</p>
 			{#if showPaymentInfo}
 				<div class="paywall-notice">
 					<p class="paywall-title">Haute résolution — bientôt disponible</p>
@@ -875,7 +844,8 @@
 
 	<!-- ─── Preview ── -->
 	<div class="preview-area">
-		{#if mockupDevice === 'free'}
+		{#if generator.device.bezelFamily === 'none'}
+			<!-- Free / no bezel -->
 			<div class="wallpaper-glow"></div>
 			<div class="wallpaper-frame" style="aspect-ratio:{previewAspect}; max-height:calc(100dvh - 10rem); max-width:100%">
 				<div bind:this={svgContainer} class="wallpaper-inner">
@@ -886,15 +856,16 @@
 					{/if}
 				</div>
 			</div>
-		{:else}
-			{@const bz = BEZEL[mockupDevice as 'phone' | 'ipad' | 'monitor']}
+		{:else if generator.device.bezelFile}
+			<!-- PNG bezel (phone / ipad / monitor) -->
+			{@const bz = BEZEL_COORDS[generator.device.bezelFile]}
 			<div
 				class="bezel-scene"
-				style="height:{mockupDevice === 'monitor' ? 'calc(100dvh - 10rem)' : 'calc(100dvh - 12rem)'}; aspect-ratio:{bz.pngW}/{bz.pngH}"
+				style="height:{generator.device.bezelFamily === 'monitor' ? 'calc(100dvh - 10rem)' : 'calc(100dvh - 12rem)'}; aspect-ratio:{bz.pngW}/{bz.pngH}"
 			>
 				<div
 					class="bezel-wallpaper"
-					style="-webkit-mask-image:url('/bezels/{mockupDevice}-mask.png'); mask-image:url('/bezels/{mockupDevice}-mask.png'); -webkit-mask-size:100% 100%; mask-size:100% 100%"
+					style="-webkit-mask-image:url('/bezels/{generator.device.bezelFile}-mask.png'); mask-image:url('/bezels/{generator.device.bezelFile}-mask.png'); -webkit-mask-size:100% 100%; mask-size:100% 100%"
 				>
 					<div
 						class="bezel-screen-pos"
@@ -909,17 +880,29 @@
 						</div>
 					</div>
 				</div>
-				<img class="bezel-img" src="/bezels/{mockupDevice}.png" alt="" draggable="false"/>
+				<img class="bezel-img" src="/bezels/{generator.device.bezelFile}.png" alt="" draggable="false"/>
+			</div>
+		{:else}
+			<!-- Mac CSS frame -->
+			<div
+				class="bezel-mac"
+				style="aspect-ratio:{generator.device.resolution.width}/{generator.device.resolution.height}; max-height:calc(100dvh - 12rem)"
+			>
+				<div class="bezel-mac-bar">
+					<span class="mac-dot mac-dot--red"></span>
+					<span class="mac-dot mac-dot--yellow"></span>
+					<span class="mac-dot mac-dot--green"></span>
+					<span class="mac-label">{generator.device.label}</span>
+				</div>
+				<div bind:this={svgContainer} class="bezel-mac-screen wallpaper-inner">
+					{#if svgString}
+						{@html svgString}
+					{:else}
+						<div class="preview-placeholder">Génération…</div>
+					{/if}
+				</div>
 			</div>
 		{/if}
-
-		<!-- Device switcher — anchored below wallpaper -->
-		<div class="device-switcher">
-			<button onclick={() => switchDevice('free')} class:ds-active={mockupDevice === 'free'}>Libre</button>
-			<button onclick={() => switchDevice('phone')} class:ds-active={mockupDevice === 'phone'}>iPhone</button>
-			<button onclick={() => switchDevice('ipad')} class:ds-active={mockupDevice === 'ipad'}>iPad</button>
-			<button onclick={() => switchDevice('monitor')} class:ds-active={mockupDevice === 'monitor'}>Écran</button>
-		</div>
 
 		<!-- Floating action buttons -->
 		<div class="preview-actions">
@@ -1127,8 +1110,6 @@
 	.permalink-input::placeholder { color: var(--color-subtle); }
 	.copy-btn { width: 30px; height: 30px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: transparent; border: none; border-left: 1px solid var(--color-border); color: var(--color-muted); cursor: pointer; transition: color 120ms, background 120ms; }
 	.copy-btn:hover { color: var(--color-fg); background: var(--color-surface-2); }
-	.res-select { width: 100%; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 8px; padding: 7px 28px 7px 10px; font-size: 12px; color: var(--color-fg); outline: none; cursor: pointer; transition: border-color 150ms; }
-	.res-select:focus { border-color: var(--color-muted); }
 	.hint { margin: 0; font-size: 11px; color: var(--color-muted); }
 	.paywall-notice { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 8px; padding: 10px 12px; }
 	.paywall-title { margin: 0 0 3px; font-size: 12px; font-weight: 500; color: var(--color-fg); }
@@ -1213,24 +1194,30 @@
 		box-shadow: 0 0 0 1px var(--color-border), 0 28px 90px rgba(0,0,0,0.20), 0 10px 28px rgba(0,0,0,0.12);
 	}
 
-	/* ── Device switcher (anchored below wallpaper) ── */
-	.device-switcher {
-		display: flex; gap: 2px; flex-shrink: 0;
-		background: var(--color-raised); border: 1px solid var(--color-border);
-		border-radius: 9px; padding: 3px;
-		box-shadow: var(--shadow-sm);
-		z-index: 2;
+	/* ── Mac CSS frame ── */
+	.bezel-mac {
+		position: relative; display: flex; flex-direction: column;
+		border-radius: 10px 10px 0 0;
+		border: 1.5px solid var(--color-border);
+		background: var(--color-raised);
+		box-shadow: var(--shadow-preview);
+		overflow: hidden;
+		max-width: 100%;
+		flex-shrink: 0;
 	}
-	.device-switcher button {
-		padding: 5px 16px; border-radius: 7px;
-		font-size: 11px; font-weight: 500;
-		border: none; background: transparent; color: var(--color-muted);
-		cursor: pointer; transition: background 120ms, color 120ms;
+	.bezel-mac-bar {
+		display: flex; align-items: center; gap: 5px;
+		padding: 6px 10px;
+		background: color-mix(in oklch, var(--color-raised) 80%, transparent);
+		border-bottom: 1px solid var(--color-border);
+		flex-shrink: 0;
 	}
-	.device-switcher button.ds-active {
-		background: var(--color-surface-2); color: var(--color-fg);
-	}
-	.device-switcher button:not(.ds-active):hover { color: var(--color-fg); }
+	.mac-dot { width: 8px; height: 8px; border-radius: 50%; display: block; }
+	.mac-dot--red    { background: #ff5f57; }
+	.mac-dot--yellow { background: #febc2e; }
+	.mac-dot--green  { background: #28c840; }
+	.mac-label { margin-left: auto; font-size: 10px; color: var(--color-muted); }
+	.bezel-mac-screen { flex: 1; min-height: 0; }
 
 	/* ── Floating preview actions (bottom-right) ── */
 	.preview-actions {
